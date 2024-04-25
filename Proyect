@@ -1,0 +1,93 @@
+import pandas as pd
+from google.colab import drive
+drive.mount('/content/drive')
+
+
+# Cargar los datos desde el archivo CSV
+file_path = '/content/drive/My Drive/Plan de estudio matematicas - Hoja 1.csv'
+datos = pd.read_csv(file_path)
+df = datos
+
+# Asegurarnos de que las columnas necesarias están presentes
+datos.rename(columns={'Duración (semanas)': 'Duración'}, inplace=True)
+expected_columns = ['Actividad', 'Descripción', 'Precedentes','Duración' ]
+if not all(column in df.columns for column in expected_columns):
+    raise ValueError(f"El DataFrame no contiene algunas de las columnas esperadas: {expected_columns}")
+
+#Convertir explícitamente las columnas que se van a manipular con métodos de string a strings
+df['Precedentes'] = df['Precedentes'].astype(str)
+df['Actividad'] = df['Actividad'].astype(str)
+
+# Crear una función para obtener las actividades críticas y el tiempo mínimo necesario
+def get_critical_path(df):
+    df['Duración'] = pd.to_numeric(df['Duración'], errors='coerce')  
+    df = df.dropna(subset=['Duración'])
+    df.loc[:, 'Duración'] = df['Duración'].astype(int)
+
+    # Crear una copia de df sin las actividades ficticias
+    df_no_dummy = df[~df['Actividad'].str.contains('-')].copy()
+    
+    # Crear la red de actividades
+    nodes = set()
+    arcs = {}
+
+    for i, row in df_no_dummy.iterrows():
+        nodes.add(row['Actividad'])
+        for pred in row['Precedentes'].split(','):
+            nodes.add(pred)
+            if pred not in arcs:
+                arcs[pred] = []
+            arcs[pred].append(row['Actividad'])
+    # Asignar pesos a los arcos
+    weights = {act: int(df_no_dummy.loc[df_no_dummy['Actividad'] == act, 'Duración'].values[0]) for act in df_no_dummy['Actividad']}
+    for pred in arcs:
+        if arcs[pred]:
+            arcs[pred] = [(succ, weights[succ]) for succ in arcs[pred]]
+    # Asumiendo que 'nodes' contiene un orden topológico, convertirlo a lista
+    ordered_nodes = list(nodes)
+
+    # Calcular las fechas más próximas para cada nodo
+    early_dates = {node: 0 for node in nodes}
+    for node in nodes:
+        if arcs.get(node): 
+            for succ, weight in arcs[node]:
+                early_dates[succ] = max(early_dates[succ], early_dates[node] + weight)
+    # Calcular las fechas más próximas para cada nodo
+    for node in ordered_nodes:
+        if node in arcs:  
+            for succ, weight in arcs[node]:
+                early_dates[succ] = max(early_dates[succ], early_dates[node] + weight)
+
+    # Calcular las fechas más lejanas para cada nodo (recorrido hacia atrás)
+    max_early_date = max(early_dates.values())
+    late_dates = {node: max_early_date for node in ordered_nodes}
+    for node in reversed(ordered_nodes):
+        if node in arcs:  
+            for succ, weight in arcs[node]:
+                late_dates[node] = min(late_dates[node], late_dates[succ] - weight)
+
+    # Obtener las actividades críticas
+    critical_activities = [act for act in df_no_dummy['Actividad'] if early_dates[act] == {node: max(early_dates.values()) for node in ordered_nodes}[act]]
+
+    # Calcular el tiempo mínimo necesario
+    if 'Tipo' in df_no_dummy.columns and (df_no_dummy['Tipo'] == 'Final').any():
+        min_time = max(early_dates[act] for act in df_no_dummy['Actividad'] if df_no_dummy.loc[df_no_dummy['Actividad'] == act, 'Tipo'].values[0] == 'Final')
+    else:
+        min_time = max(early_dates.values())
+    return critical_activities, min_time
+
+# Obtener las actividades críticas y el tiempo mínimo necesario
+critical_activities, min_time = get_critical_path(df)
+
+# Generar un reporte con formato ".txt"
+report_file_path = '/content/drive/My Drive/reporte.txt' 
+with open(report_file_path, 'w') as f:
+    f.write(f'Tiempo mínimo necesario: {min_time}\n')
+    f.write(f'Actividades críticas: {" ".join(critical_activities)}\n')
+    f.write('Detalles:\n')
+    for i, row in df.iterrows():
+        act = row['Actividad']
+        if act in critical_activities:
+            f.write(f'* {act} ({row["Descripción"]}) [Duración: {row["Duración"]}]\n')
+        else:
+            f.write(f'  {act} ({row["Descripción"]}) [Duración: {row["Duración"]}]\n')
